@@ -1,4 +1,4 @@
-package interf
+package ymlconfig
 
 import (
 	"time"
