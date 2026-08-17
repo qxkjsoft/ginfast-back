@@ -1,6 +1,10 @@
 package models
 
-import "github.com/gin-gonic/gin"
+import (
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
 
 // SysMenuAddRequest 新增菜单请求结构
 type SysMenuAddRequest struct {
@@ -98,6 +102,35 @@ type SysMenuBatchDeleteRequest struct {
 
 func (r *SysMenuBatchDeleteRequest) Validate(c *gin.Context) error {
 	return r.Check(c, r)
+}
+
+// SysMenuRestoreRequest 菜单恢复请求结构
+type SysMenuRestoreRequest struct {
+	Validator
+	Filename string `form:"filename" json:"filename" validate:"required" message:"备份文件名不能为空"`
+}
+
+func (r *SysMenuRestoreRequest) Validate(c *gin.Context) error {
+	return r.Check(c, r)
+}
+
+// SysMenuBackupFile 菜单备份文件信息
+type SysMenuBackupFile struct {
+	Filename string    `json:"filename"`          // 文件名
+	Size     int64     `json:"size"`              // 文件大小（字节）
+	ModTime  time.Time `json:"modTime"`           // 备份时间（文件修改时间）
+}
+
+// SysMenuBackupResult 菜单备份结果
+type SysMenuBackupResult struct {
+	Filename  string `json:"filename"`  // 备份文件名
+	MenuCount int    `json:"menuCount"` // 备份的菜单总数
+}
+
+// SysMenuRestoreResult 菜单恢复结果
+type SysMenuRestoreResult struct {
+	ImportResult
+	RestoredRoleMenus int `json:"restoredRoleMenus"` // 重新挂载的角色菜单授权数
 }
 
 // ImportResult 菜单导入结果

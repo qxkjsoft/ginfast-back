@@ -1,10 +1,15 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"gin-fast/app/global/app"
 	"gin-fast/app/models"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -688,4 +693,220 @@ func (s *SysMenuService) formatMenuNames(menus models.SysMenuList) string {
 		names = append(names, menu.Title)
 	}
 	return strings.Join(names, ", ")
+}
+
+// menuBackupDir 菜单备份文件目录（相对项目根目录）
+var menuBackupDir = filepath.Join("resource", "database", "menu_backup")
+
+// menuBackupPath 获取菜单备份目录的绝对路径
+func menuBackupPath() string {
+	return filepath.Join(app.BasePath, menuBackupDir)
+}
+
+// menuIdentity 获取菜单的业务标识（目录/菜单用path，按钮用permission），用于恢复后重新挂载角色授权
+func menuIdentity(menu *models.SysMenu) string {
+	if menu.Type == 3 {
+		return menu.Permission
+	}
+	return menu.Path
+}
+
+// Backup 备份全部菜单数据（含关联API）到服务器备份目录，文件名按时间生成
+func (s *SysMenuService) Backup(c *gin.Context) (*models.SysMenuBackupResult, error) {
+	// 获取全部菜单数据（含关联API）
+	menuList := models.NewSysMenuList()
+	err := menuList.Find(c, func(db *gorm.DB) *gorm.DB {
+		return db.Preload("Apis")
+	})
+	if err != nil {
+		return nil, fmt.Errorf("查询菜单数据失败: %w", err)
+	}
+	if menuList.IsEmpty() {
+		return nil, fmt.Errorf("当前没有菜单数据，无法备份")
+	}
+
+	// 此时的menuList是平铺列表，长度即菜单总数；BuildTree后仅剩根级节点
+	menuCount := len(menuList)
+	content, err := menuList.FixOrphanParentIDs().BuildTree().Json()
+	if err != nil {
+		return nil, fmt.Errorf("菜单数据序列化失败: %w", err)
+	}
+
+	// 确保备份目录存在
+	backupDir := menuBackupPath()
+	if err = os.MkdirAll(backupDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建备份目录失败: %w", err)
+	}
+
+	filename := "menu_backup_" + time.Now().Format("20060102150405") + ".json"
+	if err = os.WriteFile(filepath.Join(backupDir, filename), []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("写入备份文件失败: %w", err)
+	}
+
+	app.ZapLog.Info("菜单备份完成",
+		zap.String("文件名", filename),
+		zap.Int("菜单数量", menuCount),
+	)
+
+	return &models.SysMenuBackupResult{Filename: filename, MenuCount: menuCount}, nil
+}
+
+// BackupList 获取菜单备份文件列表（按文件名倒序，最新在前）
+func (s *SysMenuService) BackupList() ([]*models.SysMenuBackupFile, error) {
+	result := make([]*models.SysMenuBackupFile, 0)
+
+	entries, err := os.ReadDir(menuBackupPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return nil, fmt.Errorf("读取备份目录失败: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		result = append(result, &models.SysMenuBackupFile{
+			Filename: entry.Name(),
+			Size:     info.Size(),
+			ModTime:  info.ModTime(),
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Filename > result[j].Filename
+	})
+
+	return result, nil
+}
+
+// Restore 从备份文件完全恢复菜单数据
+// 在一个事务内：清空现有菜单及关联数据 -> 从备份完整重建 -> 角色的菜单授权按业务标识重新挂载。
+// API记录按path+method复用（CreateMenuApis内部FirstOrCreate），Casbin策略以path+method为键，均不受菜单ID变化影响。
+func (s *SysMenuService) Restore(c *gin.Context, filename string, userID uint) (*models.SysMenuRestoreResult, error) {
+	// 防止路径穿越，仅允许备份目录下直接的json文件
+	filename = filepath.Base(filename)
+	if filename == "." || filename == string(filepath.Separator) || !strings.HasSuffix(strings.ToLower(filename), ".json") {
+		return nil, fmt.Errorf("无效的备份文件名")
+	}
+
+	content, err := os.ReadFile(filepath.Join(menuBackupPath(), filename))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("备份文件不存在")
+		}
+		return nil, fmt.Errorf("读取备份文件失败: %w", err)
+	}
+
+	var menuList models.SysMenuList
+	if err = json.Unmarshal(content, &menuList); err != nil {
+		return nil, fmt.Errorf("解析备份文件JSON数据失败: %w", err)
+	}
+	if menuList.IsEmpty() {
+		return nil, fmt.Errorf("备份文件数据为空")
+	}
+
+	// 验证备份菜单树合法性
+	validateTreeErr := menuList.ValidateTree()
+	if !validateTreeErr.IsEmpty() {
+		return nil, validateTreeErr
+	}
+
+	// 备份文件中各菜单的 业务标识 -> 备份文件内ID 映射（用于角色授权重挂）
+	backupIdentityMap := make(map[string]uint)
+	menuList.Each(func(menu *models.SysMenu) {
+		backupIdentityMap[menuIdentity(menu)] = menu.ID
+	})
+
+	// 准备收集结果
+	newMenus := models.NewSysMenuList()
+	newApis := make([]*models.SysApi, 0)
+	restoredRoleMenus := 0
+
+	err = app.DB().WithContext(c).Transaction(func(tx *gorm.DB) error {
+		// 1. 记录现有菜单的 旧ID -> 业务标识 映射
+		existingMenus := models.NewSysMenuList()
+		if err = tx.Find(&existingMenus).Error; err != nil {
+			return fmt.Errorf("查询现有菜单失败: %w", err)
+		}
+		oldIdentityMap := make(map[uint]string, len(existingMenus))
+		for _, menu := range existingMenus {
+			oldIdentityMap[menu.ID] = menuIdentity(menu)
+		}
+
+		// 2. 快照当前角色菜单授权
+		var roleMenus []models.SysRoleMenu
+		if err = tx.Find(&roleMenus).Error; err != nil {
+			return fmt.Errorf("查询角色菜单授权失败: %w", err)
+		}
+
+		// 3. 清空现有菜单及关联数据（硬删除，含软删除数据）
+		if err = tx.Exec("DELETE FROM sys_menu_api").Error; err != nil {
+			return fmt.Errorf("清空菜单API关联失败: %w", err)
+		}
+		if err = tx.Exec("DELETE FROM sys_role_menu").Error; err != nil {
+			return fmt.Errorf("清空角色菜单授权失败: %w", err)
+		}
+		if err = tx.Exec("DELETE FROM sys_menu").Error; err != nil {
+			return fmt.Errorf("清空菜单失败: %w", err)
+		}
+
+		// 4. 从备份重建菜单及菜单API关联（全新建模式）
+		idMap := make(map[uint]uint) // oldID -> newID
+		if err = s.ProcessMenuImport(tx, menuList, 0, idMap, userID, &newMenus, &newApis); err != nil {
+			return err
+		}
+		if err = s.CreateMenuApis(tx, menuList, idMap, userID, &newApis); err != nil {
+			return err
+		}
+
+		// 5. 按业务标识把角色授权重新挂载到恢复后的菜单：旧菜单ID -> 旧标识 -> 备份内ID -> 新菜单ID
+		for _, rm := range roleMenus {
+			identity, ok := oldIdentityMap[rm.MenuID]
+			if !ok {
+				continue
+			}
+			backupID, ok := backupIdentityMap[identity]
+			if !ok {
+				continue
+			}
+			newMenuID, ok := idMap[backupID]
+			if !ok {
+				continue
+			}
+			roleMenu := models.SysRoleMenu{RoleID: rm.RoleID, MenuID: newMenuID}
+			if err = tx.FirstOrCreate(&roleMenu, roleMenu).Error; err != nil {
+				return fmt.Errorf("恢复角色菜单授权失败: %w", err)
+			}
+			restoredRoleMenus++
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result := &models.SysMenuRestoreResult{
+		ImportResult: models.ImportResult{
+			NewMenus:   s.buildImportMenuInfo(newMenus),
+			NewApis:    s.buildImportApiInfo(newApis),
+			TotalMenus: len(newMenus),
+			TotalApis:  len(newApis),
+		},
+		RestoredRoleMenus: restoredRoleMenus,
+	}
+
+	app.ZapLog.Info("菜单恢复完成",
+		zap.String("文件名", filename),
+		zap.Int("重建菜单数量", result.TotalMenus),
+		zap.Int("重挂角色授权数量", restoredRoleMenus),
+	)
+
+	return result, nil
 }

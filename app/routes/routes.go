@@ -141,6 +141,12 @@ func InitRoutes(engine *gin.Engine) {
 				sysMenu.GET("/export", sysMenuControllers.Export)
 				// 导入菜单数据
 				sysMenu.POST("/import", sysMenuControllers.Import)
+				// 备份菜单数据到服务器
+				sysMenu.POST("/backup", sysMenuControllers.Backup)
+				// 获取菜单备份文件列表
+				sysMenu.GET("/backupList", sysMenuControllers.BackupList)
+				// 从备份文件恢复菜单数据
+				sysMenu.POST("/restore", sysMenuControllers.Restore)
 			}
 
 			// 系统部门路由组

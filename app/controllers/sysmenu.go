@@ -746,3 +746,77 @@ func (sm *SysMenuController) Import(c *gin.Context) {
 
 	sm.SuccessWithMessage(c, fmt.Sprintf("成功导入 %d 个菜单，%d 个API", result.TotalMenus, result.TotalApis), result)
 }
+
+// Backup 备份菜单数据
+// @Summary 备份菜单数据
+// @Description 将当前全部菜单（含关联API）以JSON格式备份到服务器 resource/database/menu_backup 目录，文件名按时间生成
+// @Tags 菜单管理
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{} "备份成功，返回文件名和菜单数量"
+// @Failure 500 {object} map[string]interface{} "服务器内部错误"
+// @Router /sysMenu/backup [post]
+// @Security ApiKeyAuth
+func (sm *SysMenuController) Backup(c *gin.Context) {
+	result, err := sm.menuService.Backup(c)
+	if err != nil {
+		sm.FailAndAbort(c, err.Error(), err)
+		return
+	}
+
+	sm.SuccessWithMessage(c, fmt.Sprintf("备份成功，共备份 %d 个菜单", result.MenuCount), result)
+}
+
+// BackupList 获取菜单备份文件列表
+// @Summary 获取菜单备份文件列表
+// @Description 获取服务器备份目录下的菜单备份文件列表，按时间倒序
+// @Tags 菜单管理
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{} "返回备份文件列表"
+// @Failure 500 {object} map[string]interface{} "服务器内部错误"
+// @Router /sysMenu/backupList [get]
+// @Security ApiKeyAuth
+func (sm *SysMenuController) BackupList(c *gin.Context) {
+	result, err := sm.menuService.BackupList()
+	if err != nil {
+		sm.FailAndAbort(c, err.Error(), err)
+		return
+	}
+
+	sm.SuccessWithMessage(c, "获取备份文件列表成功", result)
+}
+
+// Restore 恢复菜单数据
+// @Summary 从备份文件恢复菜单数据
+// @Description 清空现有全部菜单后，从服务器备份目录下的指定备份文件完全恢复；角色的菜单授权按业务标识自动重新挂载
+// @Tags 菜单管理
+// @Accept json
+// @Produce json
+// @Param filename body string true "备份文件名"
+// @Success 200 {object} map[string]interface{} "恢复成功"
+// @Failure 400 {object} map[string]interface{} "请求参数错误"
+// @Failure 500 {object} map[string]interface{} "服务器内部错误"
+// @Router /sysMenu/restore [post]
+// @Security ApiKeyAuth
+func (sm *SysMenuController) Restore(c *gin.Context) {
+	var req models.SysMenuRestoreRequest
+	if err := req.Validate(c); err != nil {
+		sm.FailAndAbort(c, err.Error(), err)
+	}
+
+	// 获取当前用户ID
+	currentUserID := common.GetCurrentUserID(c)
+	if currentUserID == 0 {
+		sm.FailAndAbort(c, "获取当前用户ID失败", nil)
+	}
+
+	result, err := sm.menuService.Restore(c, req.Filename, currentUserID)
+	if err != nil {
+		sm.FailAndAbort(c, err.Error(), err)
+		return
+	}
+
+	sm.SuccessWithMessage(c, fmt.Sprintf("恢复成功，共重建 %d 个菜单、%d 个API，重挂 %d 条角色授权",
+		result.TotalMenus, result.TotalApis, result.RestoredRoleMenus), result)
+}
