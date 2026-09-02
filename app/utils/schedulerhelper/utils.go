@@ -19,6 +19,11 @@ func generateJobID() string {
 	return fmt.Sprintf("%d", id)
 }
 
+// GenerateJobID 生成新的任务ID（导出给"先入库再注册调度器"的调用方使用）
+func GenerateJobID() string {
+	return generateJobID()
+}
+
 func validateJob(job *Job) error {
 	if job.Group == "" {
 		return fmt.Errorf("任务分组不能为空")

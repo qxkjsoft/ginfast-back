@@ -409,17 +409,18 @@ func TestBlockDiscardPolicy(t *testing.T) {
 		t.Fatalf("AddOrUpdateJob failed: %v", err)
 	}
 
-	// 第一次执行应该成功
-	if !scheduler.canExecute(job) {
+	// 第一次执行应该成功（占位同时递增计数与注册 wg）
+	if !scheduler.tryBeginExecution(job) {
 		t.Error("first execution should be allowed")
 	}
 
-	scheduler.incrementRunningCount(job.ID)
-
-	// 第二次执行应该被丢弃
-	if scheduler.canExecute(job) {
+	// 第二次执行应该被丢弃（首次已占用执行槽）
+	if scheduler.tryBeginExecution(job) {
 		t.Error("second execution should be blocked with BlockDiscard policy")
 	}
+
+	// 释放执行槽，保持 wg 平衡（defer Stop 的 wg.Wait 需要）
+	scheduler.endExecution(job.ID)
 }
 
 // TestBlockParallelPolicy 测试并行阻塞策略
@@ -445,17 +446,21 @@ func TestBlockParallelPolicy(t *testing.T) {
 		t.Fatalf("AddOrUpdateJob failed: %v", err)
 	}
 
-	// 在并行数内应该允许执行
+	// 在并行数内应该允许执行（每次占位同时递增计数与注册 wg）
 	for i := 0; i < 3; i++ {
-		if !scheduler.canExecute(job) {
+		if !scheduler.tryBeginExecution(job) {
 			t.Errorf("execution %d should be allowed", i+1)
 		}
-		scheduler.incrementRunningCount(job.ID)
 	}
 
 	// 超过并行数应该被丢弃
-	if scheduler.canExecute(job) {
+	if scheduler.tryBeginExecution(job) {
 		t.Error("execution should be blocked when parallel limit reached")
+	}
+
+	// 释放占用的执行槽，保持 wg 平衡
+	for i := 0; i < 3; i++ {
+		scheduler.endExecution(job.ID)
 	}
 }
 
@@ -635,6 +640,11 @@ func TestRunningCount(t *testing.T) {
 		ExecutorName:   "test-executor",
 		CronExpression: "*/5 * * * * *",
 		Status:         StatusDisabled,
+		// 默认 BlockingPolicy 为 BlockDiscard（同时只允许 1 个），
+		// 计数簿记测试需要较大并行上限才能多次占位
+		// （注意 validateJob 会把 ParallelNum<=0 填成 1，必须显式给大值）
+		BlockingPolicy: BlockParallel,
+		ParallelNum:    10,
 	}
 
 	_, err := scheduler.AddOrUpdateJob(job)
@@ -642,9 +652,9 @@ func TestRunningCount(t *testing.T) {
 		t.Fatalf("AddOrUpdateJob failed: %v", err)
 	}
 
-	// 增加运行计数
-	scheduler.incrementRunningCount(job.ID)
-	scheduler.incrementRunningCount(job.ID)
+	// 占用两个执行槽（计数递增与 wg 注册在 tryBeginExecution 内原子完成）
+	scheduler.tryBeginExecution(job)
+	scheduler.tryBeginExecution(job)
 
 	scheduler.mu.RLock()
 	if job.RunningCount != 2 {
@@ -652,14 +662,17 @@ func TestRunningCount(t *testing.T) {
 	}
 	scheduler.mu.RUnlock()
 
-	// 减少运行计数
-	scheduler.decrementRunningCount(job.ID)
+	// 释放一个执行槽
+	scheduler.endExecution(job.ID)
 
 	scheduler.mu.RLock()
 	if job.RunningCount != 1 {
 		t.Errorf("expected running count 1, got %d", job.RunningCount)
 	}
 	scheduler.mu.RUnlock()
+
+	// 释放剩余执行槽，保持 wg 平衡（defer Stop 的 wg.Wait 需要）
+	scheduler.endExecution(job.ID)
 }
 
 // TestGetResults 测试获取结果通道

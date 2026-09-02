@@ -230,18 +230,20 @@ func StartServer(engine *gin.Engine) error {
 		return err
 	}
 
-	// 停止任务结果处理器
-	// 注意：必须在停止调度器之前停止，确保所有结果都被保存
-	app.ZapLog.Info("正在停止任务结果处理器...")
-	scheduler.StopResultHandler()
-	app.ZapLog.Info("任务结果处理器已停止")
-
-	// 停止任务调度器
+	// 停止任务调度器：拒绝新执行、等待在跑任务完成、close 结果通道
 	if app.JobScheduler != nil {
 		app.ZapLog.Info("正在停止任务调度器...")
 		app.JobScheduler.Stop()
 		app.ZapLog.Info("任务调度器已停止")
 	}
+
+	// 停止任务结果处理器
+	// 注意：必须在调度器停止之后执行——调度器 Stop 会 close 结果通道，
+	// 消费者读完缓冲中的剩余结果后自然退出；若先停消费者，
+	// 调度器随后产出的尾部结果将永远无人消费而丢失
+	app.ZapLog.Info("正在停止任务结果处理器...")
+	scheduler.StopResultHandler()
+	app.ZapLog.Info("任务结果处理器已停止")
 
 	app.ZapLog.Info("服务器已优雅关闭")
 	return nil

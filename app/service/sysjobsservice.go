@@ -10,6 +10,7 @@ import (
 	"gin-fast/app/utils/schedulerhelper"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -36,30 +37,8 @@ func (s *SysJobsService) Create(c *gin.Context, req models.SysJobsCreateRequest)
 		}
 	}
 
-	// 构建调度器Job对象
-	job := &schedulerhelper.Job{
-		Group:           req.Group,
-		Name:            req.Name,
-		Description:     req.Description,
-		ExecutorName:    req.ExecutorName,
-		ExecutionPolicy: schedulerhelper.ExecutionPolicy(req.ExecutionPolicy),
-		Status:          schedulerhelper.JobStatus(req.Status),
-		CronExpression:  req.CronExpression,
-		Parameters:      parameters,
-		BlockingPolicy:  schedulerhelper.BlockingPolicy(req.BlockingPolicy),
-		Timeout:         time.Duration(req.Timeout),
-		MaxRetry:        req.MaxRetry,
-		RetryInterval:   time.Duration(req.RetryInterval),
-		ParallelNum:     req.ParallelNum,
-	}
-
-	// 调用调度器AddOrUpdateJob生成jobID
-	jobID, err := app.JobScheduler.AddOrUpdateJob(job)
-	if err != nil {
-		return nil, errors.New("添加任务到调度器失败: " + err.Error())
-	}
-
-	// 创建sys_jobs记录
+	// 先入库生成记录（DB 为事实源），提前生成 jobID
+	jobID := schedulerhelper.GenerateJobID()
 	sysJobs := models.NewSysJobs()
 	sysJobs.Id = jobID
 	sysJobs.Group = req.Group
@@ -75,9 +54,34 @@ func (s *SysJobsService) Create(c *gin.Context, req models.SysJobsCreateRequest)
 	sysJobs.MaxRetry = req.MaxRetry
 	sysJobs.RetryInterval = req.RetryInterval
 	sysJobs.ParallelNum = req.ParallelNum
-	// 保存到数据库
 	if err := sysJobs.Create(c); err != nil {
 		return nil, err
+	}
+
+	// 再注册到调度器；失败则回滚刚插入的记录，避免幽灵任务（调度器运行未持久化任务）
+	job := &schedulerhelper.Job{
+		ID:              jobID,
+		Group:           req.Group,
+		Name:            req.Name,
+		Description:     req.Description,
+		ExecutorName:    req.ExecutorName,
+		ExecutionPolicy: schedulerhelper.ExecutionPolicy(req.ExecutionPolicy),
+		Status:          schedulerhelper.JobStatus(req.Status),
+		CronExpression:  req.CronExpression,
+		Parameters:      parameters,
+		BlockingPolicy:  schedulerhelper.BlockingPolicy(req.BlockingPolicy),
+		Timeout:         time.Duration(req.Timeout),
+		MaxRetry:        req.MaxRetry,
+		RetryInterval:   time.Duration(req.RetryInterval),
+		ParallelNum:     req.ParallelNum,
+	}
+	if _, err := app.JobScheduler.AddOrUpdateJob(job); err != nil {
+		if delErr := sysJobs.Delete(c); delErr != nil {
+			// 回滚失败仅记录，不掩盖原始错误（重启后 LoadJobsFromDB 不加载已删记录，自然对齐）
+			app.ZapLog.Error("创建任务后调度器注册失败，回滚数据库记录失败",
+				zap.String("jobID", jobID), zap.Error(delErr))
+		}
+		return nil, errors.New("添加任务到调度器失败: " + err.Error())
 	}
 
 	return sysJobs, nil
@@ -98,31 +102,7 @@ func (s *SysJobsService) Update(c *gin.Context, req models.SysJobsUpdateRequest)
 		}
 	}
 
-	// 构建调度器Job对象
-	job := &schedulerhelper.Job{
-		ID:              req.Id,
-		Group:           req.Group,
-		Name:            req.Name,
-		Description:     req.Description,
-		ExecutorName:    req.ExecutorName,
-		ExecutionPolicy: schedulerhelper.ExecutionPolicy(req.ExecutionPolicy),
-		Status:          schedulerhelper.JobStatus(req.Status),
-		CronExpression:  req.CronExpression,
-		Parameters:      parameters,
-		BlockingPolicy:  schedulerhelper.BlockingPolicy(req.BlockingPolicy),
-		Timeout:         time.Duration(req.Timeout),
-		MaxRetry:        req.MaxRetry,
-		RetryInterval:   time.Duration(req.RetryInterval),
-		ParallelNum:     req.ParallelNum,
-	}
-
-	// 调用调度器AddOrUpdateJob更新任务
-	_, err := app.JobScheduler.AddOrUpdateJob(job)
-	if err != nil {
-		return errors.New("更新调度器任务失败: " + err.Error())
-	}
-
-	// 查找sys_jobs记录
+	// 先更新数据库（DB 为事实源）
 	sysJobs := models.NewSysJobs()
 	if err := sysJobs.GetByID(c, req.Id); err != nil {
 		return err
@@ -141,9 +121,29 @@ func (s *SysJobsService) Update(c *gin.Context, req models.SysJobsUpdateRequest)
 	sysJobs.MaxRetry = req.MaxRetry
 	sysJobs.RetryInterval = req.RetryInterval
 	sysJobs.ParallelNum = req.ParallelNum
-	// 保存到数据库
 	if err := sysJobs.Update(c); err != nil {
 		return err
+	}
+
+	// 再同步调度器；失败时库已是最新值，重启后 LoadJobsFromDB 会自动对齐
+	job := &schedulerhelper.Job{
+		ID:              req.Id,
+		Group:           req.Group,
+		Name:            req.Name,
+		Description:     req.Description,
+		ExecutorName:    req.ExecutorName,
+		ExecutionPolicy: schedulerhelper.ExecutionPolicy(req.ExecutionPolicy),
+		Status:          schedulerhelper.JobStatus(req.Status),
+		CronExpression:  req.CronExpression,
+		Parameters:      parameters,
+		BlockingPolicy:  schedulerhelper.BlockingPolicy(req.BlockingPolicy),
+		Timeout:         time.Duration(req.Timeout),
+		MaxRetry:        req.MaxRetry,
+		RetryInterval:   time.Duration(req.RetryInterval),
+		ParallelNum:     req.ParallelNum,
+	}
+	if _, err := app.JobScheduler.AddOrUpdateJob(job); err != nil {
+		return errors.New("更新调度器任务失败（数据库已更新，重启服务后自动对齐）: " + err.Error())
 	}
 	return nil
 }
@@ -156,14 +156,16 @@ func (s *SysJobsService) Delete(c *gin.Context, id string) error {
 		return err
 	}
 
-	// 从调度器中删除任务
-	if err := app.JobScheduler.DeleteJob(id); err != nil {
-		return errors.New("从调度器删除任务失败: " + err.Error())
-	}
-
-	// 删除数据库记录
+	// 先删数据库记录（DB 为事实源；若先删调度器、库删除失败，任务会在重启后被 LoadJobsFromDB 复活）
 	if err := sysJobs.Delete(c); err != nil {
 		return err
+	}
+
+	// 再从调度器移除；任务不在内存（如禁用任务重启后未加载）时跳过
+	if app.JobScheduler.JobExists(id) {
+		if err := app.JobScheduler.DeleteJob(id); err != nil {
+			return errors.New("数据库记录已删除，但从调度器移除任务失败（重启后自动生效）: " + err.Error())
+		}
 	}
 
 	return nil

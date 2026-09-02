@@ -19,6 +19,8 @@ type JobScheduler struct {
 	jobResults chan *JobResult     // 任务结果通道
 	logger     JobLogger           // 日志记录器
 	wg         sync.WaitGroup      // 等待正在执行的任务完成
+	stopped    bool                // 停止标志：置位后拒绝新的执行请求（防 Stop 后 send-on-closed-channel）
+	stopOnce   sync.Once           // 保证 Stop 只执行一次（防二次 Stop double-close panic）
 }
 
 // NewJobScheduler 创建新的调度器
@@ -63,17 +65,26 @@ func (s *JobScheduler) Start() {
 
 // 停止调度器
 func (s *JobScheduler) Stop() {
-	s.cron.Stop()
-	s.logger.Info("system", "调度器已停止")
+	s.stopOnce.Do(func() {
+		// 先在锁内置位停止标志：此后 tryBeginExecution 拒绝一切新执行；
+		// 已放行的执行都在同一把锁内完成了 wg.Add，wg.Wait 不会漏等，
+		// 因此 Wait 返回后不可能再有 sendResult，close 是安全的
+		s.mu.Lock()
+		s.stopped = true
+		s.mu.Unlock()
 
-	// 等待所有正在执行的任务完成
-	s.wg.Wait()
+		s.cron.Stop()
+		s.logger.Info("system", "调度器已停止")
 
-	close(s.jobResults)
-	// 关闭日志记录器
-	if err := s.logger.Close(); err != nil {
-		log.Printf("Failed to close logger: %v", err)
-	}
+		// 等待所有正在执行的任务完成
+		s.wg.Wait()
+
+		close(s.jobResults)
+		// 关闭日志记录器
+		if err := s.logger.Close(); err != nil {
+			log.Printf("Failed to close logger: %v", err)
+		}
+	})
 }
 
 // 注册执行器
@@ -126,25 +137,33 @@ func (s *JobScheduler) AddOrUpdateJob(job *Job) (string, error) {
 // 创建任务执行函数
 func (s *JobScheduler) createJobFunc(job *Job) func() {
 	return func() {
-		// 检查阻塞策略
-		if !s.canExecute(job) {
+		// 原子地检查阻塞策略并占用执行槽（含 wg 注册），
+		// 消除"先 canExecute 后 increment"两步分离的 TOCTOU 竞态
+		if !s.tryBeginExecution(job) {
 			s.logger.LogJobLifecycle(job, "跳过")
 			return
 		}
-
-		// 增加运行计数
-		s.incrementRunningCount(job.ID)
-		defer s.decrementRunningCount(job.ID)
+		defer s.endExecution(job.ID)
 
 		// 执行任务
-		s.executeJob(job)
+		s.runJob(job)
 	}
 }
 
-// 检查任务是否可以执行
-func (s *JobScheduler) canExecute(job *Job) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// tryBeginExecution 原子地检查任务是否可执行并占用执行槽。
+// 策略检查、运行计数递增、WaitGroup 注册必须在同一次持锁内完成：
+//  1. 消除原 canExecute（RLock 读计数）与 incrementRunningCount（另行加锁）分离时，
+//     并发触发同时通过检查导致 BlockDiscard/BlockParallel 超限执行的竞态；
+//  2. wg.Add 与 Stop 置位 stopped 互斥，保证 Stop 的 wg.Wait 不会漏掉已放行的执行
+//
+// 注：锁内调用 logger 与原实现一致（FileJobLogger 内部自带锁，且不会回调调度器，无死锁风险）
+func (s *JobScheduler) tryBeginExecution(job *Job) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stopped {
+		return false
+	}
 
 	currentJob, exists := s.jobs[job.ID]
 	if !exists {
@@ -152,38 +171,47 @@ func (s *JobScheduler) canExecute(job *Job) bool {
 		return false
 	}
 
-	// 获取当前运行中的任务数量
-	runningCount := currentJob.RunningCount
-
 	switch job.BlockingPolicy {
 	case BlockDiscard:
-		// 丢弃：如果任务正在执行中则丢弃当前任务（同一时间只能有一个任务执行）
-		if runningCount == 0 {
+		// 丢弃：同一时间只允许一个执行
+		if currentJob.RunningCount == 0 {
+			currentJob.RunningCount++
+			s.wg.Add(1)
 			return true
 		}
-		s.logger.Warn(job.ID, "任务被丢弃（BlockDiscard策略）：任务正在执行中，当前运行数(%d)", runningCount)
+		s.logger.Warn(job.ID, "任务被丢弃（BlockDiscard策略）：任务正在执行中，当前运行数(%d)", currentJob.RunningCount)
 		return false
 
 	case BlockParallel:
-
-		if job.ParallelNum <= 0 {
+		// 并行：超过并行数则丢弃
+		if job.ParallelNum <= 0 || currentJob.RunningCount < job.ParallelNum {
+			currentJob.RunningCount++
+			s.wg.Add(1)
 			return true
 		}
-		// 并行：如果超过并行数则丢弃
-		if runningCount < job.ParallelNum {
-			return true
-		}
-		s.logger.Warn(job.ID, "任务被丢弃（BlockParallel策略）：当前运行数(%d) >= 并行数(%d)", runningCount, job.ParallelNum)
+		s.logger.Warn(job.ID, "任务被丢弃（BlockParallel策略）：当前运行数(%d) >= 并行数(%d)", currentJob.RunningCount, job.ParallelNum)
 		return false
 
 	default:
-		// 默认策略与 BlockDiscard 相同：如果任务正在执行中则丢弃
-		if runningCount == 0 {
+		// 默认策略与 BlockDiscard 相同：同一时间只允许一个执行
+		if currentJob.RunningCount == 0 {
+			currentJob.RunningCount++
+			s.wg.Add(1)
 			return true
 		}
-		s.logger.Warn(job.ID, "任务被丢弃（默认策略）：任务正在执行中，当前运行数(%d)", runningCount)
+		s.logger.Warn(job.ID, "任务被丢弃（默认策略）：任务正在执行中，当前运行数(%d)", currentJob.RunningCount)
 		return false
 	}
+}
+
+// endExecution 释放执行槽：递减运行计数并注销 WaitGroup，与 tryBeginExecution 严格配对
+func (s *JobScheduler) endExecution(jobID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if job, exists := s.jobs[jobID]; exists && job.RunningCount > 0 {
+		job.RunningCount--
+	}
+	s.wg.Done()
 }
 
 // 立即执行一次任务
@@ -196,25 +224,23 @@ func (s *JobScheduler) ExecuteNow(jobID string) error {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 
-	if !s.canExecute(job) {
+	// 原子检查并占用执行槽（含 stopped 检查与 wg 注册）
+	if !s.tryBeginExecution(job) {
 		return fmt.Errorf("job cannot execute due to blocking policy")
 	}
 
 	// 异步执行
 	go func() {
-		s.incrementRunningCount(job.ID)
-		defer s.decrementRunningCount(job.ID)
-		s.executeJob(job)
+		defer s.endExecution(job.ID)
+		s.runJob(job)
 	}()
 
 	return nil
 }
 
 // 执行任务（非递归版本）
-func (s *JobScheduler) executeJob(job *Job) {
-	s.wg.Add(1)
-	defer s.wg.Done()
-
+// wg 注册/注销已上移至 tryBeginExecution/endExecution
+func (s *JobScheduler) runJob(job *Job) {
 	startTime := time.Now()
 	jobExecutionID := fmt.Sprintf("%s-%d", job.ID, startTime.UnixNano())
 
@@ -284,12 +310,24 @@ func (s *JobScheduler) executeJob(job *Job) {
 	}
 }
 
-// 新增：安全发送结果
+// resultSendTimeout 结果通道满时等待消费者腾出空间的最长时间（变量形式便于测试调小）
+var resultSendTimeout = 2 * time.Second
+
+// sendResult 安全发送结果：通道满时先等消费者一小段时间跟上；
+// 超时仍失败则记录错误日志后丢弃——不再静默丢失 sys_job_results 历史
 func (s *JobScheduler) sendResult(result *JobResult) {
+	// 快路径：缓冲有空位直接入队
 	select {
 	case s.jobResults <- result:
-	default:
 		return
+	default:
+	}
+
+	// 慢路径：限时等待重试，仍失败则留痕丢弃
+	select {
+	case s.jobResults <- result:
+	case <-time.After(resultSendTimeout):
+		s.logger.Error(result.JobID, "任务结果发送超时被丢弃：结果通道已满（status=%s, retryCount=%d）", result.Status, result.RetryCount)
 	}
 }
 
@@ -403,21 +441,4 @@ func (s *JobScheduler) ListExecutors() []Executor {
 // 获取任务结果通道
 func (s *JobScheduler) GetResults() <-chan *JobResult {
 	return s.jobResults
-}
-
-// 更新运行计数
-func (s *JobScheduler) incrementRunningCount(jobID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if job, exists := s.jobs[jobID]; exists {
-		job.RunningCount++
-	}
-}
-
-func (s *JobScheduler) decrementRunningCount(jobID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if job, exists := s.jobs[jobID]; exists && job.RunningCount > 0 {
-		job.RunningCount--
-	}
 }
