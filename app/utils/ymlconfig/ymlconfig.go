@@ -80,6 +80,13 @@ func (y *ymlConfig) Get(keyName string) interface{} {
 	return value
 }
 
+// IsSet 判断配置键是否存在
+func (y *ymlConfig) IsSet(keyName string) bool {
+	y.mu.RLock()
+	defer y.mu.RUnlock()
+	return y.viper.IsSet(keyName)
+}
+
 func (y *ymlConfig) GetString(keyName string) string {
 	y.mu.RLock()
 	defer y.mu.RUnlock()

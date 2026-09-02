@@ -11,6 +11,7 @@ import (
 	"gin-fast/app/controllers"
 	"gin-fast/app/global/app"
 	"gin-fast/app/middleware"
+	"gin-fast/app/utils/cachehelper"
 )
 
 var userControllers = controllers.NewUserController()                       // 用户控制器
@@ -48,14 +49,14 @@ func InitRoutes(engine *gin.Engine) {
 	if app.ConfigYml.GetBool("server.appdebug") {
 		// 注册Swagger路由
 		engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-		// 查看内存缓存项
-		engine.GET("/viewCache", func(ctx *gin.Context) {
+		// 查看内存缓存项（需登录鉴权，且 token 类缓存值脱敏，防止泄露在线用户凭证）
+		engine.GET("/viewCache", middleware.JWTAuthMiddleware(), func(ctx *gin.Context) {
 			items, err := app.Cache.GetAll(context.Background())
 			if err != nil {
 				ctx.JSON(500, gin.H{"error": "获取缓存项失败", "details": err.Error()})
 				return
 			}
-			ctx.JSON(200, items)
+			ctx.JSON(200, cachehelper.MaskTokenValues(items))
 		})
 	}
 

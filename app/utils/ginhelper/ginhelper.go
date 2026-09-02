@@ -12,6 +12,7 @@ import (
 
 	"gin-fast/app/global/app"
 	"gin-fast/app/global/consts"
+	"gin-fast/app/middleware"
 	"gin-fast/app/scheduler"
 
 	"io"
@@ -44,8 +45,9 @@ func GetEngine() *gin.Engine {
 		- /debug/pprof/goroutine - Goroutine信息
 		- /debug/pprof/block - 阻塞分析
 		- /debug/pprof/threadcreate - 线程创建分析
+		端点挂 JWT 鉴权，避免调试模式下性能数据对外裸奔
 		**/
-		pprof.Register(engine)
+		pprof.Register(engine.Group("", middleware.JWTAuthMiddleware()))
 	}
 	return engine
 

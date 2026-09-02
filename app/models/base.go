@@ -3,6 +3,7 @@ package models
 import (
 	"net/url"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -181,6 +182,22 @@ type BasePaging struct {
 	Order    string `json:"order" form:"order"`
 }
 
+// orderSegmentRegexp 排序段只允许 "列名 [asc|desc]"，列名限定字母/数字/下划线/点，防止 ORDER BY 注入
+var orderSegmentRegexp = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.]*(\s+(asc|desc|ASC|DESC))?$`)
+
+// sanitizeOrder 校验排序参数：按逗号分段，只保留合法段；全部非法时返回空串
+func sanitizeOrder(order string) string {
+	segments := strings.Split(order, ",")
+	valid := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		seg = strings.TrimSpace(seg)
+		if seg != "" && orderSegmentRegexp.MatchString(seg) {
+			valid = append(valid, seg)
+		}
+	}
+	return strings.Join(valid, ",")
+}
+
 // 分页数据
 func (bp *BasePaging) Paginate() func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
@@ -188,8 +205,8 @@ func (bp *BasePaging) Paginate() func(db *gorm.DB) *gorm.DB {
 			db = db.Offset((bp.PageNum - 1) * bp.PageSize).Limit(bp.PageSize)
 		}
 
-		if bp.Order != "" {
-			db = db.Order(bp.Order)
+		if order := sanitizeOrder(bp.Order); order != "" {
+			db = db.Order(order)
 		}
 		return db
 	}

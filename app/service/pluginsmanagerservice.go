@@ -15,6 +15,7 @@ import (
 
 	"gin-fast/app/global/app"
 	"gin-fast/app/models"
+	"gin-fast/app/utils/filehelper"
 	"gin-fast/app/utils/gormhelper"
 
 	"github.com/gin-gonic/gin"
@@ -1020,7 +1021,10 @@ func (pms *PluginsManagerService) extractAndOverwriteFiles(zipReader *zip.Reader
 		// 处理后端文件
 		if strings.HasPrefix(file.Name, "ginfastback/") {
 			relPath := strings.TrimPrefix(file.Name, "ginfastback/")
-			destPath := filepath.Join(backendRoot, relPath)
+			destPath, err := filehelper.SafeJoinPath(backendRoot, relPath)
+			if err != nil {
+				return fmt.Errorf("插件包含不安全的文件路径: %s", file.Name)
+			}
 			if err := pms.extractFile(file, destPath); err != nil {
 				return err
 			}
@@ -1029,8 +1033,10 @@ func (pms *PluginsManagerService) extractAndOverwriteFiles(zipReader *zip.Reader
 		// 处理前端文件
 		if frontendRoot != "" && strings.HasPrefix(file.Name, "ginfastfront/") {
 			relPath := strings.TrimPrefix(file.Name, "ginfastfront/")
-			destPath := filepath.Join(frontendRoot, relPath)
-
+			destPath, err := filehelper.SafeJoinPath(frontendRoot, relPath)
+			if err != nil {
+				return fmt.Errorf("插件包含不安全的文件路径: %s", file.Name)
+			}
 			if err := pms.extractFile(file, destPath); err != nil {
 				return err
 			}

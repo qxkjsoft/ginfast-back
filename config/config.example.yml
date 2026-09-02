@@ -54,7 +54,7 @@ httpserver:
   idle_timeout: 60    # TCP空闲连接超时(秒)
   handler_timeout: 30 #  请求处理超时(秒)，超过该时间，将返回超时错误
 token:
-  jwttokensignkey:  "gin-fast"   #设置token生成时加密的签名
+  jwttokensignkey:  "df2a2166baa06cf67abcf687dd043bf7c4fe3a270447cc8326e8cc9f3e76944c"   #设置token生成时加密的签名（部署时务必更换为随机强密钥，勿使用示例值）
   jwttokenexpire:  43200    #设置token过期时间，单位秒 示例:43200=12小时
   jwttokenrefreshexpire:  2592000  #设置刷新token过期时间，单位秒 示例:2592000=30天
   cachekeyprefix: "gin-fast:"  # 缓存前缀

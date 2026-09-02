@@ -13,6 +13,9 @@ type YmlConfigInterf interface {
 	// Get 获取配置值（任意类型）
 	Get(keyName string) interface{}
 
+	// IsSet 判断配置键是否存在
+	IsSet(keyName string) bool
+
 	// GetString 获取字符串类型配置值
 	GetString(keyName string) string
 

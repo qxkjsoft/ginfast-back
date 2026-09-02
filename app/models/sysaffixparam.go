@@ -91,7 +91,7 @@ func (r *ChunkInitRequest) Validate(c *gin.Context) error {
 type ChunkUploadRequest struct {
 	Validator
 	File        *multipart.FileHeader `form:"file" validate:"required" message:"分片文件不能为空"`
-	UploadId    string                `form:"uploadId" validate:"required" message:"上传ID不能为空"`
+	UploadId    string                `form:"uploadId" validate:"required|regex:^[A-Za-z0-9_-]{1,64}$" message:"required:上传ID不能为空|regex:上传ID格式不正确"`
 	ChunkIndex  int                   `form:"chunkIndex" validate:"required" message:"分片序号不能为空"`
 	ChunkMd5    string                `form:"chunkMd5" message:"分片MD5"`
 	FileMd5     string                `form:"fileMd5" message:"文件MD5"`
@@ -106,7 +106,7 @@ func (r *ChunkUploadRequest) Validate(c *gin.Context) error {
 // ChunkMergeRequest 合并分片请求
 type ChunkMergeRequest struct {
 	Validator
-	UploadId    string `json:"uploadId" validate:"required" message:"上传ID不能为空"`
+	UploadId    string `json:"uploadId" validate:"required|regex:^[A-Za-z0-9_-]{1,64}$" message:"required:上传ID不能为空|regex:上传ID格式不正确"`
 	FileMd5     string `json:"fileMd5" validate:"required" message:"文件MD5不能为空"`
 	FileName    string `json:"fileName" validate:"required" message:"文件名不能为空"`
 	FileSize    int64  `json:"fileSize" validate:"required" message:"文件大小不能为空"`
@@ -121,7 +121,7 @@ func (r *ChunkMergeRequest) Validate(c *gin.Context) error {
 // ChunkCancelRequest 取消上传请求
 type ChunkCancelRequest struct {
 	Validator
-	UploadId string `json:"uploadId" validate:"required" message:"上传ID不能为空"`
+	UploadId string `json:"uploadId" validate:"required|regex:^[A-Za-z0-9_-]{1,64}$" message:"required:上传ID不能为空|regex:上传ID格式不正确"`
 }
 
 // Validate 验证请求参数
