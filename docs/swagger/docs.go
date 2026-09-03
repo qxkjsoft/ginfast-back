@@ -1519,6 +1519,119 @@ const docTemplate = `{
                 }
             }
         },
+        "/sysApi/previewRoutes": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "遍历后台已注册的路由，预览将要同步到 sys_api 表的内容（不写库）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "API管理"
+                ],
+                "summary": "预览路由同步",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "是否覆盖已存在记录的 Title/ApiGroup",
+                        "name": "overwrite",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "是否纳入 /api/plugins/* 路由",
+                        "name": "includePlugins",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "插件路由分组是否带 plugins/ 前缀",
+                        "name": "groupByPlugin",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功返回预览结果",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysApi/syncRoutes": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "遍历后台已注册的路由，按 path+method 去重写入 sys_api 表",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "API管理"
+                ],
+                "summary": "执行路由同步",
+                "parameters": [
+                    {
+                        "description": "同步选项",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SysApiSyncRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "同步成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/sysApi/{id}": {
             "get": {
                 "security": [
@@ -1563,6 +1676,263 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/add": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "新增地区",
+                "parameters": [
+                    {
+                        "description": "地区信息",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.AreaAddRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/children/{value}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "根据父级编码获取直接子节点（不含孙节点）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "获取子节点",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "父级地区编码",
+                        "name": "value",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/delete": {
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "删除地区",
+                "parameters": [
+                    {
+                        "description": "地区删除请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.AreaDeleteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/edit": {
+            "put": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "更新地区",
+                "parameters": [
+                    {
+                        "description": "地区信息",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.AreaUpdateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/initData": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "从种子文件 area.json 导入行政区划数据到数据库",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "初始化行政区划数据",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/list": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "获取顶层行政区划（省级），不含子节点",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "获取根节点列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/search": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "按编码或名称模糊搜索，返回扁平列表及完整路径",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "搜索地区",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "keyword",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysArea/tree": {
+            "get": {
+                "description": "返回完整的行政区划树形结构（公开接口，无需认证）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "地区管理"
+                ],
+                "summary": "获取完整树",
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -2994,6 +3364,78 @@ const docTemplate = `{
                 }
             }
         },
+        "/sysMenu/backup": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "将当前全部菜单（含关联API）以JSON格式备份到服务器 resource/database/menu_backup 目录，文件名按时间生成",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "菜单管理"
+                ],
+                "summary": "备份菜单数据",
+                "responses": {
+                    "200": {
+                        "description": "备份成功，返回文件名和菜单数量",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysMenu/backupList": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "获取服务器备份目录下的菜单备份文件列表，按时间倒序",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "菜单管理"
+                ],
+                "summary": "获取菜单备份文件列表",
+                "responses": {
+                    "200": {
+                        "description": "返回备份文件列表",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/sysMenu/batchDelete": {
             "delete": {
                 "security": [
@@ -3327,6 +3769,60 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "菜单导入成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sysMenu/restore": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "清空现有全部菜单后，从服务器备份目录下的指定备份文件完全恢复；角色的菜单授权按业务标识自动重新挂载",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "菜单管理"
+                ],
+                "summary": "从备份文件恢复菜单数据",
+                "parameters": [
+                    {
+                        "description": "备份文件名",
+                        "name": "filename",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "恢复成功",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -5640,11 +6136,62 @@ const docTemplate = `{
                 }
             }
         },
-        "models.ChunkCancelRequest": {
+        "models.AreaAddRequest": {
             "type": "object",
             "required": [
-                "uploadId"
+                "label",
+                "value"
             ],
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "parent": {
+                    "type": "string"
+                },
+                "sort": {
+                    "type": "integer"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.AreaDeleteRequest": {
+            "type": "object",
+            "required": [
+                "value"
+            ],
+            "properties": {
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.AreaUpdateRequest": {
+            "type": "object",
+            "required": [
+                "id",
+                "label",
+                "value"
+            ],
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "sort": {
+                    "type": "integer"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ChunkCancelRequest": {
+            "type": "object",
             "properties": {
                 "uploadId": {
                     "type": "string"
@@ -5684,8 +6231,7 @@ const docTemplate = `{
                 "fileMd5",
                 "fileName",
                 "fileSize",
-                "totalChunks",
-                "uploadId"
+                "totalChunks"
             ],
             "properties": {
                 "fileMd5": {
@@ -5750,6 +6296,30 @@ const docTemplate = `{
             "properties": {
                 "id": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.SysApiSyncRequest": {
+            "type": "object",
+            "properties": {
+                "groupByPlugin": {
+                    "description": "GroupByPlugin 插件路由分组是否带 plugins/ 前缀，默认 true",
+                    "type": "boolean"
+                },
+                "includePlugins": {
+                    "description": "IncludePlugins 是否纳入 /api/plugins/* 路由，默认 true",
+                    "type": "boolean"
+                },
+                "overwrite": {
+                    "description": "Overwrite 是否覆盖已存在记录的 Title/ApiGroup，默认 false（幂等模式）",
+                    "type": "boolean"
+                },
+                "selectedKeys": {
+                    "description": "SelectedKeys 仅同步用户勾选的路由，格式为 \"path|method\"\n为空时同步全部预览结果（兼容旧行为）",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -6487,8 +7057,11 @@ const docTemplate = `{
                 "email": {
                     "type": "string"
                 },
-                "password": {
+                "oldPassword": {
                     "description": "ID       uint   ` + "`" + `form:\"id\" validate:\"required\" message:\"用户ID不能为空\"` + "`" + `",
+                    "type": "string"
+                },
+                "password": {
                     "type": "string"
                 },
                 "phone": {

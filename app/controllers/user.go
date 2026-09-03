@@ -15,6 +15,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -184,8 +185,8 @@ func (uc *UserController) GetUserByID(c *gin.Context) {
 		uc.FailAndAbort(c, "Invalid user ID", err)
 	}
 
-	// 获取用户信息
-	user, err := uc.UserService.GetUserProfile(c, uint(id))
+	// 获取用户信息（限定当前租户，防止跨租户读取）
+	user, err := uc.UserService.GetUserProfile(c, uint(id), tenanthelper.TenantScope(c))
 	if err != nil {
 		uc.FailAndAbort(c, "获取用户信息失败", err)
 	}
@@ -210,6 +211,21 @@ func (uc *UserController) Add(c *gin.Context) {
 	if err := req.Validate(c); err != nil {
 		uc.FailAndAbort(c, err.Error(), err)
 	}
+
+	// 校验角色必须属于当前租户，防止跨租户授权提权（全局上下文租户为0时不校验）
+	if currentTenantID := common.GetCurrentTenantID(c); currentTenantID > 0 && len(req.Roles) > 0 {
+		roleList := models.NewSysRoleList()
+		err := roleList.Find(c, func(db *gorm.DB) *gorm.DB {
+			return db.Where("id IN ? AND tenant_id = ?", req.Roles, currentTenantID)
+		})
+		if err != nil {
+			uc.FailAndAbort(c, "验证角色信息失败", err)
+		}
+		if len(roleList) != len(req.Roles) {
+			uc.FailAndAbort(c, "存在不属于当前租户的角色", nil)
+		}
+	}
+
 	// 检查用户名是否已存在
 	user := models.NewUser()
 	err := user.GetUserByUsername(c, req.UserName)
@@ -326,9 +342,25 @@ func (uc *UserController) Update(c *gin.Context) {
 		uc.FailAndAbort(c, err.Error(), err)
 	}
 
-	// 检查用户是否存在
+	// 校验角色必须属于当前租户，防止跨租户授权提权（全局上下文租户为0时不校验）
+	if currentTenantID := common.GetCurrentTenantID(c); currentTenantID > 0 && len(req.Roles) > 0 {
+		roleList := models.NewSysRoleList()
+		err := roleList.Find(c, func(db *gorm.DB) *gorm.DB {
+			return db.Where("id IN ? AND tenant_id = ?", req.Roles, currentTenantID)
+		})
+		if err != nil {
+			uc.FailAndAbort(c, "验证角色信息失败", err)
+		}
+		if len(roleList) != len(req.Roles) {
+			uc.FailAndAbort(c, "存在不属于当前租户的角色", nil)
+		}
+	}
+
+	// 检查用户是否存在（限定当前租户，防止跨租户改/删）
 	user := models.NewUser()
-	err := user.GetUserByID(c, req.Id)
+	err := user.Find(c, tenanthelper.TenantScope(c), func(db *gorm.DB) *gorm.DB {
+		return db.Where("id = ?", req.Id)
+	})
 	if err != nil {
 		uc.FailAndAbort(c, err.Error(), err)
 	}
@@ -447,9 +479,11 @@ func (uc *UserController) Delete(c *gin.Context) {
 		uc.FailAndAbort(c, err.Error(), err)
 	}
 
-	// 检查用户是否存在
+	// 检查用户是否存在（限定当前租户，防止跨租户改/删）
 	user := models.NewUser()
-	err := user.GetUserByID(c, req.Id)
+	err := user.Find(c, tenanthelper.TenantScope(c), func(db *gorm.DB) *gorm.DB {
+		return db.Where("id = ?", req.Id)
+	})
 	if err != nil {
 		uc.FailAndAbort(c, err.Error(), err)
 	}
@@ -537,7 +571,16 @@ func (uc *UserController) UpdateAccount(c *gin.Context) {
 			uc.FailAndAbort(c, "邮箱已被其他用户使用", nil)
 		}
 	}
+	passwordChanged := false
 	if req.Password != "" {
+		// 修改密码必须验证旧密码，防止token泄露后被静默改密接管账号
+		if req.OldPassword == "" {
+			uc.FailAndAbort(c, "请输入旧密码", nil)
+		}
+		if err := passwordhelper.ComparePassword(user.Password, req.OldPassword); err != nil {
+			uc.FailAndAbort(c, "旧密码不正确", nil)
+		}
+
 		// 加密新密码
 		hashedPassword, err := passwordhelper.HashPassword(req.Password)
 		if err != nil {
@@ -546,6 +589,7 @@ func (uc *UserController) UpdateAccount(c *gin.Context) {
 
 		// 更新用户信息
 		user.Password = string(hashedPassword)
+		passwordChanged = true
 	}
 
 	if req.Phone != "" {
@@ -557,6 +601,19 @@ func (uc *UserController) UpdateAccount(c *gin.Context) {
 
 	if err := app.DB().WithContext(c).Save(user).Error; err != nil {
 		uc.FailAndAbort(c, "更新用户信息失败", err)
+	}
+
+	// 密码修改成功后吊销当前token；refresh token按用户吊销（每用户单key），
+	// 其他设备access token在剩余有效期内自然过期、无法续期
+	if passwordChanged {
+		if tokenString, err := common.GetAccessToken(c); err == nil && tokenString != "" {
+			app.TokenService.RevokeTokenWithCache(tokenString)
+		}
+		if err := app.TokenService.RevokeRefreshToken(currentUserID); err != nil {
+			app.ZapLog.Error("改密后吊销refresh token失败", zap.Error(err))
+		}
+		uc.SuccessWithMessage(c, "密码修改成功，请重新登录", nil)
+		return
 	}
 
 	uc.SuccessWithMessage(c, "账户信息更新成功", nil)

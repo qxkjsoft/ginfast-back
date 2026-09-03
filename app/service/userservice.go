@@ -16,13 +16,15 @@ func NewUserService() *User {
 	return &User{}
 }
 
-// 获取用户信息(包含角色、权限)
-func (u *User) GetUserProfile(c *gin.Context, userID uint) (profile *models.UserProfile, err error) {
+// 获取用户信息(包含角色、权限)；可选 scopes 用于限定租户等查询范围
+func (u *User) GetUserProfile(c *gin.Context, userID uint, scopes ...func(*gorm.DB) *gorm.DB) (profile *models.UserProfile, err error) {
 
 	user := models.NewUser()
-	err = user.Find(c, func(d *gorm.DB) *gorm.DB {
+	// Go 不允许混用普通参数与 ... 展开，先拼接完整 scope 切片再整体传入
+	queryScopes := append([]func(*gorm.DB) *gorm.DB{func(d *gorm.DB) *gorm.DB {
 		return d.Preload("Department").Preload("Roles").Preload("Tenant").Where("id = ?", userID)
-	})
+	}}, scopes...)
+	err = user.Find(c, queryScopes...)
 	if err != nil {
 		return
 	}

@@ -120,16 +120,19 @@ func (c *SysOperationLogController) Export(ctx *gin.Context) {
 	logList := models.NewSysOperationLogList()
 	err := logList.Find(ctx, req.Handle(), func(db *gorm.DB) *gorm.DB {
 		return db.Order("created_at DESC").Limit(10000) // 限制导出数量
-	})
+	}, tenanthelper.TenantScope(ctx))
 	if err != nil {
 		c.FailAndAbort(ctx, "获取导出数据失败", err)
 	}
 
 	// 设置响应头
-	ctx.Header("Content-Type", "text/csv")
+	ctx.Header("Content-Type", "text/csv; charset=utf-8")
 	ctx.Header("Content-Disposition", "attachment; filename=operation_logs_"+time.Now().Format("20060102_150405")+".csv")
 	ctx.Header("Content-Transfer-Encoding", "binary")
 	ctx.Header("Cache-Control", "no-cache")
+
+	// 写入 UTF-8 BOM，避免 Excel 打开中文乱码
+	ctx.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 
 	// 创建CSV写入器
 	writer := csv.NewWriter(ctx.Writer)
