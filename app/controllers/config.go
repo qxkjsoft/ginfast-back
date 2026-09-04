@@ -47,9 +47,9 @@ func (con ConfigController) GetConfig(ctx *gin.Context) {
 	systemConfig["systemCopyright"] = app.ConfigYml.GetString("system.systemcopyright") // 版权声明信息
 	systemConfig["systemRecordNo"] = app.ConfigYml.GetString("system.systemrecordno")   // 网站备案号
 	// 获取DemoAccount配置，仅在演示账号开关开启时传递
+	// 只返回用户名用于登录页提示；密码不通过公开接口下发，防止匿名获取后配合 notcheckuser 绕过提权
 	if app.ConfigYml.GetBool("server.demoaccount.enabled") {
 		systemConfig["defaultusername"] = app.ConfigYml.GetString("server.demoaccount.defaultusername") // 演示账号默认用户名
-		systemConfig["defaultpassword"] = app.ConfigYml.GetString("server.demoaccount.defaultpassword") // 演示账号默认密码
 	}
 	result["system"] = systemConfig // 将系统配置放入结果集
 

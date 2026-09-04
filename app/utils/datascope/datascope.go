@@ -11,14 +11,25 @@ import (
 	"gorm.io/gorm"
 )
 
-// 获取用户角色列表
-func getUserRoles(userID uint) ([]*models.SysRole, error) {
+// 获取用户及其在指定租户下的角色；userTenantID 为用户默认归属租户（0=全局用户，不按租户过滤）
+func getUserRoles(userID, tenantID uint) (userTenantID uint, roles []*models.SysRole, err error) {
 	var user models.User
-	err := app.DB().Preload("Roles").Where("id = ?", userID).First(&user).Error
+	err = app.DB().Preload("Roles").Where("id = ?", userID).First(&user).Error
 	if err != nil {
-		return nil, err
+		return
 	}
-	return user.Roles, nil
+	userTenantID, roles = user.TenantID, user.Roles
+	// 租户用户只保留当前登录租户下的角色，防止其他租户的角色（如"全部数据"）放大本租户数据权限
+	if userTenantID != 0 {
+		filtered := roles[:0]
+		for _, role := range roles {
+			if role.TenantID == tenantID {
+				filtered = append(filtered, role)
+			}
+		}
+		roles = filtered
+	}
+	return
 }
 
 // 获取部门及其所有子部门ID
@@ -138,8 +149,8 @@ func GetDataScope(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 			}
 		}
 
-		// 获取用户角色
-		roles, err := getUserRoles(userID)
+		// 获取用户角色（租户用户只取当前登录租户下的角色）
+		userTenantID, roles, err := getUserRoles(userID, claims.TenantID)
 		if err != nil || len(roles) == 0 {
 			// 如果没有角色或查询失败，默认只能查看自己的数据
 			return db.Where("created_by = ?", userID)
@@ -165,9 +176,13 @@ func GetDataScope(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 		// 获取用户所属部门ID（只查询一次）
 		userDeptID, _ := getUserDepartmentID(userID)
 
-		// 构建部门树
+		// 构建部门树（租户用户只加载当前登录租户的部门，防止跨租户部门混入）
 		var allDepartments models.SysDepartmentList
-		err = app.DB().Find(&allDepartments).Error
+		deptQuery := app.DB()
+		if userTenantID != 0 {
+			deptQuery = deptQuery.Where("tenant_id = ?", claims.TenantID)
+		}
+		err = deptQuery.Find(&allDepartments).Error
 		if err != nil {
 			// 查询失败，默认只能查看自己的数据
 			return db.Where("created_by = ?", userID)
@@ -200,6 +215,21 @@ func GetDataScope(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 					}
 				}
 			}
+		}
+
+		// 租户用户：过滤掉不属于当前租户的部门（如 CheckedDepts 配置了其他租户的部门ID）
+		if userTenantID != 0 {
+			deptSet := make(map[uint]bool, len(allDepartments))
+			for _, dept := range allDepartments {
+				deptSet[dept.ID] = true
+			}
+			filteredIDs := allDeptIDs[:0]
+			for _, deptID := range allDeptIDs {
+				if deptSet[deptID] {
+					filteredIDs = append(filteredIDs, deptID)
+				}
+			}
+			allDeptIDs = filteredIDs
 		}
 
 		// 去重部门ID

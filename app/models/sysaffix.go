@@ -44,9 +44,9 @@ func (SysAffix) TableName() string {
 	return "sys_affix"
 }
 
-// GetByID 根据ID获取文件附件
-func (m *SysAffix) GetByID(c context.Context, id uint) error {
-	return app.DB().WithContext(c).First(m, id).Error
+// GetByID 根据ID获取文件附件；可选 scopes 用于限定租户等查询范围
+func (m *SysAffix) GetByID(c context.Context, id uint, funcs ...func(*gorm.DB) *gorm.DB) error {
+	return app.DB().WithContext(c).Scopes(funcs...).First(m, id).Error
 }
 
 // Create 创建文件附件记录

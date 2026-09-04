@@ -47,6 +47,9 @@ captcha:
 httpserver:
   port: ":8080"    # 服务端口
   allowcrossdomain: true    #是否允许跨域
+  corsorigins:   # 跨域来源白名单（仅回显命中项；配置 "*" 放行全部且不带凭证）示例为前端 vite dev 默认端口
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
   serverrootpath: "/public" # 静态资源路由路径
   serverroot: "./resource/public" # 静态资源根目录
   read_timeout: 30    # TCP读取超时(秒)

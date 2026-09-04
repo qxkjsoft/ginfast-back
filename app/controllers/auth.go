@@ -250,6 +250,14 @@ func (ac *AuthController) RefreshToken(c *gin.Context) {
 	if err = app.DB().WithContext(c).First(&user, claims.UserID).Error; err != nil {
 		ac.FailAndAbort(c, "用户不存在", err)
 	}
+	// 全局屏蔽 ErrRecordNotFound，已删除用户 err 为 nil、记录为零值
+	if user.IsEmpty() {
+		ac.FailAndAbort(c, "用户不存在", nil)
+	}
+	// 禁用用户不允许刷新，防止被封禁用户在refresh token有效期内继续换取新token
+	if user.Status != 1 {
+		ac.FailAndAbort(c, "用户未启用", nil)
+	}
 
 	// 从refresh token claims中获取租户信息
 	tenantID := claims.TenantID

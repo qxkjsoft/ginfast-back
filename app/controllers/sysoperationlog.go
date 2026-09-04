@@ -86,7 +86,7 @@ func (c *SysOperationLogController) Delete(ctx *gin.Context) {
 		c.FailAndAbort(ctx, err.Error(), err)
 	}
 
-	if err := app.DB().WithContext(ctx).Where("id IN ?", req.IDs).Delete(&models.SysOperationLog{}).Error; err != nil {
+	if err := app.DB().WithContext(ctx).Scopes(tenanthelper.TenantScope(ctx)).Where("id IN ?", req.IDs).Delete(&models.SysOperationLog{}).Error; err != nil {
 		c.FailAndAbort(ctx, "删除操作日志失败", err)
 	}
 

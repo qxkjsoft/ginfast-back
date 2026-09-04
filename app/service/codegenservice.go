@@ -10,12 +10,24 @@ import (
 	"gin-fast/app/utils/gormhelper"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// identifierRegexp 数据库/表名只允许字母、数字、下划线，防止标识符注入（database/table 来源于 query string）
+var identifierRegexp = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+// validateIdentifier 校验数据库/表名等标识符的合法性，非法时返回错误
+func validateIdentifier(name, kind string) error {
+	if name == "" || !identifierRegexp.MatchString(name) {
+		return fmt.Errorf("非法的%s: %s", kind, name)
+	}
+	return nil
+}
 
 // CodeGenService 代码生成服务
 type CodeGenService struct{}
@@ -120,6 +132,9 @@ func (cgs *CodeGenService) GetTables(dbType, database string) ([]models.TableInf
 		// 从配置文件中获取默认数据库
 		database = app.ConfigYml.GetString("gormv2." + dbType + ".write.database")
 	}
+	if err := validateIdentifier(database, "数据库名"); err != nil {
+		return nil, err
+	}
 	var db *gorm.DB
 	var err error
 
@@ -163,49 +178,24 @@ func (cgs *CodeGenService) GetTables(dbType, database string) ([]models.TableInf
 			tables = append(tables, table)
 		}
 	case "postgresql":
-		// PostgreSQL需要先切换到指定数据库
-		_, err := sqlDB.Exec("USE " + database)
+		rows, err := sqlDB.Query(`
+			SELECT
+				t.tablename,
+				obj_description(c.oid) as tablecomment
+			FROM pg_tables t
+			LEFT JOIN pg_class c ON c.relname = t.tablename
+			WHERE t.schemaname = 'public'`)
 		if err != nil {
-			// 如果USE命令失败，尝试直接查询
-			rows, err := sqlDB.Query(`
-				SELECT 
-					t.tablename,
-					obj_description(c.oid) as tablecomment
-				FROM pg_tables t
-				LEFT JOIN pg_class c ON c.relname = t.tablename
-				WHERE t.schemaname = 'public'`)
-			if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var table models.TableInfo
+			if err := rows.Scan(&table.TableName, &table.TableComment); err != nil {
 				return nil, err
 			}
-			defer rows.Close()
-
-			for rows.Next() {
-				var table models.TableInfo
-				if err := rows.Scan(&table.TableName, &table.TableComment); err != nil {
-					return nil, err
-				}
-				tables = append(tables, table)
-			}
-		} else {
-			rows, err := sqlDB.Query(`
-				SELECT 
-					t.tablename,
-					obj_description(c.oid) as tablecomment
-				FROM pg_tables t
-				LEFT JOIN pg_class c ON c.relname = t.tablename
-				WHERE t.schemaname = 'public'`)
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-
-			for rows.Next() {
-				var table models.TableInfo
-				if err := rows.Scan(&table.TableName, &table.TableComment); err != nil {
-					return nil, err
-				}
-				tables = append(tables, table)
-			}
+			tables = append(tables, table)
 		}
 	case "sqlserver":
 		rows, err := sqlDB.Query(`
@@ -245,6 +235,12 @@ func (cgs *CodeGenService) GetTableColumns(database, table string) (models.Table
 
 	if table == "" {
 		return nil, fmt.Errorf("表名不能为空")
+	}
+	if err := validateIdentifier(database, "数据库名"); err != nil {
+		return nil, err
+	}
+	if err := validateIdentifier(table, "表名"); err != nil {
+		return nil, err
 	}
 
 	// 获取数据库连接
@@ -319,111 +315,55 @@ func (cgs *CodeGenService) GetTableColumns(database, table string) (models.Table
 			columns = append(columns, column)
 		}
 	case "postgresql":
-		// PostgreSQL需要先切换到指定数据库
-		_, err := sqlDB.Exec("USE " + database)
+		rows, err := sqlDB.Query(`
+			SELECT
+				c.column_name,
+				c.data_type,
+				col_description((c.table_schema||'.'||c.table_name)::regclass, c.ordinal_position) as column_comment,
+				c.is_nullable,
+				c.column_default,
+				CASE WHEN pk.column_name IS NOT NULL THEN 'PRI' ELSE '' END as column_key,
+				'' as extra,
+				'' as column_type
+			FROM information_schema.columns c
+			LEFT JOIN (
+				SELECT kc.column_name
+				FROM information_schema.table_constraints tc
+				JOIN information_schema.key_column_usage kc
+					ON tc.constraint_name = kc.constraint_name
+					AND tc.table_schema = kc.table_schema
+				WHERE tc.constraint_type = 'PRIMARY KEY'
+					AND tc.table_schema = 'public'
+					AND tc.table_name = $1
+			) pk ON c.column_name = pk.column_name
+			WHERE c.table_schema = 'public' AND c.table_name = $1
+			ORDER BY c.ordinal_position`, table)
 		if err != nil {
-			// 如果USE命令失败，尝试直接查询
-			rows, err := sqlDB.Query(`
-				SELECT
-					c.column_name,
-					c.data_type,
-					col_description((c.table_schema||'.'||c.table_name)::regclass, c.ordinal_position) as column_comment,
-					c.is_nullable,
-					c.column_default,
-					CASE WHEN pk.column_name IS NOT NULL THEN 'PRI' ELSE '' END as column_key,
-					'' as extra,
-					'' as column_type
-				FROM information_schema.columns c
-				LEFT JOIN (
-					SELECT kc.column_name
-					FROM information_schema.table_constraints tc
-					JOIN information_schema.key_column_usage kc
-						ON tc.constraint_name = kc.constraint_name
-						AND tc.table_schema = kc.table_schema
-					WHERE tc.constraint_type = 'PRIMARY KEY'
-						AND tc.table_schema = 'public'
-						AND tc.table_name = $1
-				) pk ON c.column_name = pk.column_name
-				WHERE c.table_schema = 'public' AND c.table_name = $1
-				ORDER BY c.ordinal_position`, table)
-			if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var column models.TableColumn
+			var columnComment, columnDefault, columnKey, extra, columnType sql.NullString
+			if err := rows.Scan(
+				&column.ColumnName,
+				&column.DataType,
+				&columnComment,
+				&column.IsNullable,
+				&columnDefault,
+				&columnKey,
+				&extra,
+				&columnType); err != nil {
 				return nil, err
 			}
-			defer rows.Close()
-
-			for rows.Next() {
-				var column models.TableColumn
-				var columnComment, columnDefault, columnKey, extra, columnType sql.NullString
-				if err := rows.Scan(
-					&column.ColumnName,
-					&column.DataType,
-					&columnComment,
-					&column.IsNullable,
-					&columnDefault,
-					&columnKey,
-					&extra,
-					&columnType); err != nil {
-					return nil, err
-				}
-				column.ColumnComment = columnComment
-				column.ColumnDefault = columnDefault
-				column.ColumnKey = columnKey
-				column.Extra = extra
-				// PostgreSQL不支持unsigned，直接设置为false
-				column.IsUnsigned = false
-				columns = append(columns, column)
-			}
-		} else {
-			rows, err := sqlDB.Query(`
-				SELECT
-					c.column_name,
-					c.data_type,
-					col_description((c.table_schema||'.'||c.table_name)::regclass, c.ordinal_position) as column_comment,
-					c.is_nullable,
-					c.column_default,
-					CASE WHEN pk.column_name IS NOT NULL THEN 'PRI' ELSE '' END as column_key,
-					'' as extra,
-					'' as column_type
-				FROM information_schema.columns c
-				LEFT JOIN (
-					SELECT kc.column_name
-					FROM information_schema.table_constraints tc
-					JOIN information_schema.key_column_usage kc
-						ON tc.constraint_name = kc.constraint_name
-						AND tc.table_schema = kc.table_schema
-					WHERE tc.constraint_type = 'PRIMARY KEY'
-						AND tc.table_schema = 'public'
-						AND tc.table_name = $1
-				) pk ON c.column_name = pk.column_name
-				WHERE c.table_schema = 'public' AND c.table_name = $1
-				ORDER BY c.ordinal_position`, table)
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-
-			for rows.Next() {
-				var column models.TableColumn
-				var columnComment, columnDefault, columnKey, extra, columnType sql.NullString
-				if err := rows.Scan(
-					&column.ColumnName,
-					&column.DataType,
-					&columnComment,
-					&column.IsNullable,
-					&columnDefault,
-					&columnKey,
-					&extra,
-					&columnType); err != nil {
-					return nil, err
-				}
-				column.ColumnComment = columnComment
-				column.ColumnDefault = columnDefault
-				column.ColumnKey = columnKey
-				column.Extra = extra
-				// PostgreSQL不支持unsigned，直接设置为false
-				column.IsUnsigned = false
-				columns = append(columns, column)
-			}
+			column.ColumnComment = columnComment
+			column.ColumnDefault = columnDefault
+			column.ColumnKey = columnKey
+			column.Extra = extra
+			// PostgreSQL不支持unsigned，直接设置为false
+			column.IsUnsigned = false
+			columns = append(columns, column)
 		}
 	case "sqlserver":
 		rows, err := sqlDB.Query(`
