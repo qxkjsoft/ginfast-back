@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gin-fast/app/global/app"
@@ -165,21 +166,56 @@ type AreaSearchItem struct {
 
 // ===== 完整树缓存 =====
 
-var (
-	areaTreeCache    *AreaModelList
-	areaTreeCacheAt  time.Time
-	areaTreeCacheTTL = 5 * time.Minute
-)
+// areaTreeCache 完整树缓存。/sysArea/tree 为公开端点，并发读与增删改触发的
+// 失效之间共享包级状态，必须持锁访问
+var areaTreeCache = newTTLAreaTreeCache(5 * time.Minute)
+
+// ttlAreaTreeCache 带过期时间的行政区划树缓存，所有读写均持锁
+type ttlAreaTreeCache struct {
+	mu      sync.RWMutex
+	ttl     time.Duration
+	tree    *AreaModelList
+	updated time.Time
+}
+
+func newTTLAreaTreeCache(ttl time.Duration) *ttlAreaTreeCache {
+	return &ttlAreaTreeCache{ttl: ttl}
+}
+
+// get 返回未过期的缓存树，未命中时 ok 为 false
+func (c *ttlAreaTreeCache) get() (tree AreaModelList, ok bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tree != nil && time.Since(c.updated) < c.ttl {
+		return *c.tree, true
+	}
+	return nil, false
+}
+
+// set 覆盖缓存
+func (c *ttlAreaTreeCache) set(tree AreaModelList) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tree = &tree
+	c.updated = time.Now()
+}
+
+// invalidate 失效缓存
+func (c *ttlAreaTreeCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tree = nil
+}
 
 // InvalidateAreaTreeCache 失效树缓存
 func InvalidateAreaTreeCache() {
-	areaTreeCache = nil
+	areaTreeCache.invalidate()
 }
 
 // GetAreaTree 获取完整行政区划树（带 5 分钟内存缓存）
 func GetAreaTree(ctx context.Context) (AreaModelList, error) {
-	if areaTreeCache != nil && time.Since(areaTreeCacheAt) < areaTreeCacheTTL {
-		return *areaTreeCache, nil
+	if cached, ok := areaTreeCache.get(); ok {
+		return cached, nil
 	}
 	all := NewAreaList()
 	if err := all.Find(ctx, func(db *gorm.DB) *gorm.DB {
@@ -188,8 +224,7 @@ func GetAreaTree(ctx context.Context) (AreaModelList, error) {
 		return nil, err
 	}
 	tree := all.BuildTree()
-	areaTreeCache = &tree
-	areaTreeCacheAt = time.Now()
+	areaTreeCache.set(tree)
 	return tree, nil
 }
 

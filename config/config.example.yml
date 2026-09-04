@@ -2,14 +2,14 @@ server:
   appdebug: true   # 设置程序所处的模式，debug=true 调试模式，日志优先显示在控制台， debug=false 非调试模式，日志将写入日志文件
   cachetype: "redis" #缓存模式 memory OR redis
   syslog: false  # 是否开启系统日志
-  notcheckuser: [1]    # 不检查权限的用户（api、菜单及数据权限均不检查），例如：[1]
+  notcheckuser: []   # 不检查权限的用户（api、菜单及数据权限均不检查）。警告：若与演示账号同时配置，演示密码可被匿名获取并绕过全部权限校验，生产环境务必保持为空
   # 演示账号配置
   demoaccount:
     enabled: false    # 是否启用演示账号功能
     # 演示账号的用户ID列表，可以设置多个账号
     userids: []       # 演示账号的用户ID列表，例如：[1, 2, 3]
     defaultusername: "admin"  # 登录页默认账号
-    defaultpassword: "123456"  # 登录页默认密码
+    defaultpassword: "123456"  # 演示密码（显示在登录页密码框 placeholder，由用户自行输入）
     # 允许演示账号执行非GET请求的路径前缀列表（白名单）
     # 配置后，演示账号可以对这些路径执行POST/PUT/DELETE等操作
     # 示例：
