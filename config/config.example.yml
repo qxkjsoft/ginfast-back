@@ -46,8 +46,21 @@ captcha:
   length: 4   # 验证码生成时的长度
 httpserver:
   port: ":8080"    # 服务端口
-  allowcrossdomain: true    #是否允许跨域
-  corsorigins:   # 跨域来源白名单（仅回显命中项；配置 "*" 放行全部且不带凭证）示例为前端 vite dev 默认端口
+  # 是否启用CORS跨域中间件
+  # true  = 启用，按下方 corsorigins 白名单放行跨域请求（白名单决定谁能跨域访问）
+  # false = 不注册中间件，浏览器跨域请求全部被拦截
+  # 注意：CORS 仅对浏览器生效（curl/服务端互调不受影响）；
+  #      前后端同源部署（nginx 托管前端静态文件并将 /api 反代到本服务）时不触发跨域校验，此项设 true/false 均无影响
+  allowcrossdomain: true
+  # 跨域来源白名单（仅 allowcrossdomain: true 时生效）：
+  # 1. 与浏览器请求头 Origin 精确匹配，协议+域名+端口必须完全一致且不带尾部斜杠：
+  #    http/https、带/不带 www、不同端口均视为不同 Origin，如 https://example.com ≠ https://www.example.com ≠ http://example.com:8080
+  # 2. 填写前端页面所在的 Origin（不是后端自己的地址）；页面有多个访问入口（多域名/多端口）时需逐个列出
+  # 3. 未命中的来源不回显 Access-Control-Allow-Origin，浏览器将拦截跨域请求（前端接口全部失败，浏览器控制台报 CORS 错误）
+  # 4. 配置 "*" 可放行任意来源（不带凭证），等于放弃来源白名单，生产环境不建议使用
+  # 5. 前后端同源部署时可留空：corsorigins: []
+  # 以下示例为前端 vite dev 默认端口：
+  corsorigins:
     - "http://localhost:5173"
     - "http://127.0.0.1:5173"
   serverrootpath: "/public" # 静态资源路由路径
